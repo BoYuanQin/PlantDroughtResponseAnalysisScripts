@@ -1,0 +1,154 @@
+Pipeline <- setRefClass("Pipeline",
+  fields = list(inputDir = "character", resultsDir = "character", normalizedData = "ANY"),
+  methods = list(
+    read_and_process_files = function() {
+	  if (!requireNamespace("edgeR", quietly = TRUE)) stop("Package 'edgeR' not installed.")
+      library(edgeR)
+      txt_files <- list.files(inputDir, pattern = "*.txt", full.names = TRUE)
+      all_data <- list()
+	  batch_vector <- vector("list", length = length(txt_files))  
+      for (i in seq_along(txt_files)) {
+	    file <- txt_files[i]
+        tryCatch({
+          data <- read.table(file, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+          data <- na.omit(data)
+		  data[data < 0] <- 0		  
+          data <- aggregate(data[-1], by = list(data[[1]]), FUN = mean)  
+          colnames(data)[1] <- "GeneID"
+          all_data[[file]] <- data
+		  batch_vector[[i]] <- rep(i, ncol(data)-1)  
+        }, error = function(e) {
+          warning(sprintf("Failed to read file %s: %s", file, e$message))
+        })
+      }
+      if (length(all_data) == 0) stop("No valid files found in the input directory")
+      
+      # 按第一列（GeneID）合并
+      merged_data <- Reduce(function(x, y) merge(x, y, by = "GeneID"), all_data)
+      # merged_data[is.na(merged_data)] <- 0
+	  rm(all_data)  # 清除原始数据列表
+	  gc()          # 强制进行垃圾回收
+      rownames(merged_data) <- merged_data$GeneID
+	  merged_data <- merged_data[, -which(colnames(merged_data) == "GeneID")]
+      normalizedData <<- DGEList(counts = as.matrix(merged_data))
+	  normalizedData$batch_vector <<- unlist(batch_vector)  
+
+      write.table(as.data.frame(normalizedData$counts), file.path(resultsDir, "raw_combined_data.txt"), sep = "\t", quote = FALSE, row.names = TRUE)
+    },
+    
+    normalize_and_calculate_tpm = function() {
+      if (!requireNamespace("edgeR", quietly = TRUE)) stop("Package 'edgeR' not installed.")
+      library(edgeR)
+
+      # 归一化和计算 TPM
+	  colnames_data <- colnames(normalizedData$counts)
+      conditions <- ifelse(grepl("control", colnames_data), "Control", "Treatment")
+      keep <- filterByExpr(normalizedData, group = as.factor(conditions))
+      normalizedData <<- normalizedData[keep, , keep.lib.sizes = FALSE]
+      normalizedData <<- calcNormFactors(normalizedData)
+      counts_per_million <- cpm(normalizedData)
+      # tpm <- sweep(counts_per_million, 2, colSums(counts_per_million), "/") * 1e6 
+      # normalizedData$counts <- counts_per_million
+
+      write.table(as.data.frame(counts_per_million), file.path(resultsDir, "normalized_data.txt"), sep = "\t", quote = FALSE, row.names = TRUE)
+    },
+
+    batch_effect_removal = function() {
+      if (!requireNamespace("sva", quietly = TRUE)) stop("Package 'sva' not installed.")
+      if (!requireNamespace("limma", quietly = TRUE)) stop("Package 'limma' not installed.")
+      library(sva)
+      library(limma)
+
+      # SVA
+      mod_matrix <- model.matrix(~ normalizedData$batch_vector)
+      sva_output <- sva(normalizedData$counts, mod_matrix)
+	  sv_list <- sva_output$sv
+	  mod_matrix_sv <- cbind(mod_matrix, sv_list)
+	  sva_data <- removeBatchEffect(normalizedData$counts, covariates = mod_matrix_sv)
+
+      # ComBat
+      combat_data <- ComBat(normalizedData$counts, batch = normalizedData$batch_vector)
+
+      # log(x + 1)
+      log_data <- log2(normalizedData$counts + 1)
+
+      write.table(as.data.frame(sva_data), file.path(resultsDir, "sva_data.txt"), sep = "\t", quote = FALSE, row.names = TRUE)
+      write.table(as.data.frame(combat_data), file.path(resultsDir, "combat_data.txt"), sep = "\t", quote = FALSE, row.names = TRUE)
+      write.table(as.data.frame(log_data), file.path(resultsDir, "log_data.txt"), sep = "\t", quote = FALSE, row.names = TRUE)
+
+      # 绘制 PCA 图
+      if (!requireNamespace("RColorBrewer", quietly = TRUE)) stop("Package 'RColorBrewer' not installed.")
+      if (!requireNamespace("ggplot2", quietly = TRUE)) stop("Package 'ggplot2' not installed.")
+      library(RColorBrewer)
+      library(ggplot2)
+
+      pdf(file.path(resultsDir, "PCA_plots.pdf"), width = 8.27, height = 11.69)
+      pca_before <- prcomp(t(normalizedData$counts), scale. = TRUE)
+      pca_sva <- prcomp(t(sva_data), scale. = TRUE)
+      pca_combat <- prcomp(t(combat_data), scale. = TRUE)
+      pca_log <- prcomp(t(log_data), scale. = TRUE)
+	  
+	  write.csv(pca_before$x, file.path(resultsDir, "pca_before_scores.csv"))
+	  write.csv(pca_before$rotation, file.path(resultsDir,"pca_before_loadings.csv"))	  
+	  write.csv(pca_sva$x, file.path(resultsDir,"pca_sva_scores.csv"))
+	  write.csv(pca_sva$rotation, file.path(resultsDir,"pca_sva_loadings.csv"))	  
+	  write.csv(pca_combat$x, file.path(resultsDir,"pca_combat_scores.csv"))
+	  write.csv(pca_combat$rotation, file.path(resultsDir,"pca_combat_loadings.csv"))	  
+	  write.csv(pca_log$x, file.path(resultsDir,"pca_log_scores.csv"))
+	  write.csv(pca_log$rotation, file.path(resultsDir,"pca_log_loadings.csv"))
+	  
+	  par(mfrow=c(2, 2))
+	  if (!requireNamespace("car", quietly = TRUE)) {install.packages("car")}
+	  library(car) 	  
+	  plot(pca_before$x[, 1:2], col = brewer.pal(3, "Set1")[1], pch = 16, cex = 3, main = "Before Batch Effect Removal")
+	  dataEllipse(pca_before$x[,1], pca_before$x[,2], levels = 0.95, add = TRUE, lwd = 2)
+	  
+	  plot(pca_sva$x[, 1:2], col = brewer.pal(3, "Set1")[2], pch = 17, cex = 3, main = "After SVA")
+	  dataEllipse(pca_sva$x[,1], pca_sva$x[,2], levels = 0.95, add = TRUE, lwd = 2)
+	  
+	  plot(pca_combat$x[, 1:2], col = brewer.pal(3, "Set1")[3], pch = 15, cex = 3, main = "After ComBat")
+	  dataEllipse(pca_combat$x[,1], pca_combat$x[,2], levels = 0.95, add = TRUE, lwd = 2)
+	  
+	  plot(pca_log$x[, 1:2], col = brewer.pal(4, "Set1")[4], pch = 18, cex = 3, main = "After log(x+1)")
+	  dataEllipse(pca_log$x[,1], pca_log$x[,2], levels = 0.95, add = TRUE, lwd = 2)
+      dev.off()
+    },
+
+    differential_expression_analysis = function(logFC_threshold = 2, p_value_threshold = 0.01) {
+      if (!requireNamespace("limma", quietly = TRUE)) stop("Package 'limma' not installed.")
+      library(limma)
+
+      sva_data <- read.table(file.path(resultsDir, "sva_data.txt"), header = TRUE, sep = "\t", row.names = 1)
+      combat_data <- read.table(file.path(resultsDir, "combat_data.txt"), header = TRUE, sep = "\t", row.names = 1)
+      log_data <- read.table(file.path(resultsDir, "log_data.txt"), header = TRUE, sep = "\t", row.names = 1)
+
+      # 针对不同批次校正方法，逐一执行差异表达分析
+      methods <- list(sva = sva_data, combat = combat_data, log = log_data)
+
+      for (method_name in names(methods)) {
+        current_data <- methods[[method_name]]
+		current_data <- current_data[apply(current_data, 1, function(x) all(x >= 0)), ]
+		colnames_data <- colnames(current_data)
+		conditions <- ifelse(grepl("control", colnames_data), "Control", "Treatment")
+		design <- model.matrix(~0 + conditions)
+        v <- voom(current_data, design)
+        fit <- lmFit(v, design)
+        fit <- eBayes(fit)
+        results <- topTable(fit, coef = 2, adjust = "BH", number = Inf)
+		print(head(results,10))
+        # 筛选显著差异表达基因
+        significant_genes <- subset(results, abs(logFC) > logFC_threshold & adj.P.Val < p_value_threshold)
+
+        write.table(results, file.path(resultsDir, paste0("differential_expression_results_", method_name, ".txt")), sep = "\t", quote = FALSE, row.names = TRUE)
+        write.table(significant_genes, file.path(resultsDir, paste0("significant_genes_", method_name, ".txt")), sep = "\t", quote = FALSE, row.names = TRUE)
+      }
+    }
+  )
+)
+
+# 实例
+pipeline <- Pipeline$new(inputDir = "Data", resultsDir = "Results")
+pipeline$read_and_process_files()
+pipeline$normalize_and_calculate_tpm()
+pipeline$batch_effect_removal()
+pipeline$differential_expression_analysis(logFC_threshold = 2, p_value_threshold = 0.01)

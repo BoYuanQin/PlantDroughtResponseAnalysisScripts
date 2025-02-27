@@ -1,0 +1,5 @@
+parameters:
+  input_file: "inputdata/aligned_sequences_Fastgreedy.fasta"
+  output_dir: "output" 
+  output_file: "sequence_identity_matrix_Fastgreedy.csv"
+  threshold: 75

@@ -1,0 +1,13 @@
+name: edgeR_readxl_ggplot2_ggrepel
+channels:
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+dependencies:
+  - r-base==4.3.1
+  - bioconda::bioconductor-edger
+  - conda-forge::r-readxl
+  - r-ggplot2
+  - r-ggrepel
+  - conda-forge::r-codetools
+  - conda-forge::r-dplyr
+prefix: /root/anaconda3/envs/edgeR_readxl_ggplot2_ggrepel

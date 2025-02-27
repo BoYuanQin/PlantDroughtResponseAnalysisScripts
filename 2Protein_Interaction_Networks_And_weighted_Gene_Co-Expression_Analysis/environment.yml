@@ -1,0 +1,14 @@
+name: ppi_wgcna
+channels:
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+dependencies:
+  - r-base==4.3.1
+  - anaconda::python
+  - bioconda::r-wgcna
+  - r::r-ape
+  - bioconda::bioconductor-stringdb
+  - conda-forge::r-igraph
+  - bioconda::mcl
+  - bioconda::bioconductor-impute
+prefix: /root/anaconda3/envs/ppi_wgcna

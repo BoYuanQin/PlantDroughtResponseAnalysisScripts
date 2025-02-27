@@ -1,0 +1,11 @@
+name: conserved_key_gene_identification
+channels:
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+dependencies:
+  - biopython
+  - conda-forge::pyyaml
+  - networkx
+  - numpy
+  - pandas
+prefix: /root/anaconda3/envs/conserved_key_gene_identification
